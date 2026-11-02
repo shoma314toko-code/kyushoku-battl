@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>給食バトル - レートマッチ</title>
+<style>
+  :root { color-scheme: light; --ink:#263329; --green:#dfeeda; --panel:#fff; --accent:#e58b2f; }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:24px 14px 40px; background:linear-gradient(135deg,#f4f8ee,#e8f0df); color:var(--ink); font-family:system-ui,-apple-system,"Segoe UI",sans-serif; }
+  main { max-width:900px; margin:auto; }
+  h1 { margin:0; font-size:clamp(26px,5vw,38px); }
+  .sub { color:#627260; margin:4px 0 18px; }
+  .stats { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:12px; }
+  .panel { background:var(--panel); border:1px solid #d8e2d2; border-radius:14px; padding:12px 14px; box-shadow:0 3px 12px #3040200b; }
+  .stat-label { color:#71806e; font-size:12px; }
+  .stat-value { font-weight:800; font-size:clamp(17px,3vw,25px); margin-top:3px; }
+  .rate-panel { text-align:center; margin-bottom:12px; }
+  #rate { font-size:42px; font-weight:900; line-height:1.15; }
+  #rank { font-weight:800; font-size:18px; }
+  canvas { width:100%; height:auto; display:block; background:#e3f0d9; border:2px solid #b8cdb0; border-radius:14px; }
+  .game-wrap { position:relative; }
+  .overlay { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:20px; color:#fff; background:#18251de8; border-radius:14px; }
+  .overlay h2 { font-size:clamp(25px,5vw,36px); margin:8px 0; }
+  .overlay p { line-height:1.7; margin:8px 0 18px; }
+  button { border:0; border-radius:11px; padding:12px 18px; background:#fff; color:#263329; font-weight:800; font-size:15px; cursor:pointer; }
+  button:hover { filter:brightness(.96); transform:translateY(-1px); }
+  button:focus-visible { outline:3px solid #f4bd72; outline-offset:2px; }
+  .primary { color:white; background:var(--accent); }
+  .controls { display:flex; flex-wrap:wrap; gap:10px; margin-top:12px; }
+  .controls button { flex:1; border:1px solid #d8e2d2; }
+  .help { margin-top:12px; line-height:1.8; font-size:14px; }
+  .help strong { color:#40583c; }
+  #message { min-height:26px; text-align:center; padding:9px 0 0; color:#53634f; font-weight:700; }
+  @media(max-width:560px) { body{padding:15px 9px 28px}.stats{grid-template-columns:repeat(2,1fr);gap:6px}.panel{padding:9px}.stat-value{font-size:16px} }
+</style>
+</head>
+<body>
+<main>
+  <h1>🍛 給食バトル</h1>
+  <p class="sub">ランクマッチで好き嫌いモンスターを撃退しよう！</p>
+
+  <section class="panel rate-panel">
+    <div class="stat-label">CURRENT RATE</div>
+    <div id="rate">1000</div>
+    <div id="rank">🥈 シルバー</div>
+    <div id="record" class="stat-label">0勝 0敗 ・ 最高連勝 0</div>
+  </section>
+
+  <section class="stats">
+    <div class="panel"><div class="stat-label">HP</div><div class="stat-value" id="hp">❤️❤️❤️❤️❤️</div></div>
+    <div class="panel"><div class="stat-label">今回のスコア</div><div class="stat-value" id="score">0</div></div>
+    <div class="panel"><div class="stat-label">敵の残り</div><div class="stat-value" id="left">5</div></div>
+    <div class="panel"><div class="stat-label">難易度</div><div class="stat-value" id="level">Lv.1</div></div>
+  </section>
+
+  <div class="game-wrap">
+    <canvas id="game" width="800" height="500" aria-label="給食バトルのゲーム画面"></canvas>
+    <div class="overlay" id="overlay">
+      <div style="font-size:52px">🍛⚔️</div>
+      <h2>給食バトル</h2>
+      <p>給食を投げて敵を5体倒そう！<br>勝利するとレート＋25、敗北すると－15<br>試合ごとに敵が強くなる！</p>
+      <button class="primary" id="start">マッチ開始！</button>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="primary" id="next">次のマッチ</button>
+    <button id="pause">Ⅱ 一時停止</button>
+    <button id="reset">戦績・レートを初期化</button>
+  </div>
+  <div class="panel help">
+    <strong>🎮 操作方法</strong><br>
+    <strong>移動：</strong> W A S D または ↑ ↓ ← →<br>
+    <strong>攻撃：</strong> スペースキー（押し続けると連続攻撃）<br>
+    <strong>ヒント：</strong> 敵にぶつからないように動きながら攻撃しよう！
+  </div>
+  <div id="message" aria-live="polite">「マッチ開始！」を押してね。</div>
+</main>
+
+<script>
+(() => {
+  "use strict";
+  const $ = id => document.getElementById(id);
+  const canvas = $("game"), ctx = canvas.getContext("2d");
+  const W = canvas.width, H = canvas.height;
+  const SAVE_KEY = "kyushokuBattleStats_v1";
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(SAVE_KEY) || "{}") || {}; } catch (_) {}
+  let rate = Number.isFinite(saved.rate) ? Math.max(0, saved.rate) : 1000;
+  let wins = saved.wins || 0, losses = saved.losses || 0;
+  let streak = saved.streak || 0, bestStreak = saved.bestStreak || 0;
+  // 旧バージョンのセーブデータにも対応
+  let difficultyLevel = Number.isFinite(saved.difficultyLevel) ? Math.max(1, saved.difficultyLevel) : 1;
+  let currentMatchLevel = difficultyLevel;
+  let player = null, enemies = [], shots = [];
+  let keys = Object.create(null), active = false, paused = false, ended = true;
+  let hp = 5, score = 0, cooldown = 0, invincible = 0, lastTime = 0;
+  let facing = {x:0,y:-1};
+
+  function rankName() {
+    if (rate >= 2500) return "👑 マスター";
+    if (rate >= 2000) return "💎 ダイヤ";
+    if (rate >= 1500) return "🥇 ゴールド";
+    if (rate >= 1000) return "🥈 シルバー";
+    return "🥉 ブロンズ";
+  }
+  function saveStats() {
+    try { localStorage.setItem(SAVE_KEY, JSON.stringify({rate,wins,losses,streak,bestStreak,difficultyLevel})); } catch (_) {}
+  }
+  function updateUI() {
+    $("rate").textContent = rate;
+    $("rank").textContent = rankName();
+    $("record").textContent = `${wins}勝 ${losses}敗 ・ 現在 ${streak}連勝 / 最高 ${bestStreak}連勝`;
+    $("hp").textContent = "❤️".repeat(hp) + "🖤".repeat(5-hp);
+    $("score").textContent = score;
+    $("left").textContent = enemies.length;
+    $("level").textContent = `Lv.${active ? currentMatchLevel : difficultyLevel}`;
+  }
+  function makeEnemy() {
+    const side = Math.floor(Math.random()*4);
+    return {
+      x: side===0 ? 25 : side===1 ? W-25 : 35+Math.random()*(W-70),
+      y: side===2 ? 25 : side===3 ? H-25 : 35+Math.random()*(H-70),
+      r:19, maxHp:Math.min(2+Math.floor((currentMatchLevel-1)/3),8),
+      hp:Math.min(2+Math.floor((currentMatchLevel-1)/3),8),
+      speed:Math.min(0.72+Math.random()*0.38+(currentMatchLevel-1)*0.09,2.5)
+    };
+  }
+  function startMatch() {
+    currentMatchLevel=difficultyLevel;
+    hp=5; score=0; cooldown=0; invincible=0;
+    player={x:W/2,y:H-95};
+    facing={x:0,y:-1};
+    const enemyCount=Math.min(5+Math.floor((currentMatchLevel-1)/2),16);
+    enemies=Array.from({length:enemyCount},makeEnemy);
+    shots=[];
+    active=true; paused=false; ended=false;
+    $("overlay").style.display="none";
+    $("pause").textContent="Ⅱ 一時停止";
+    $("message").textContent="敵を5体倒そう！";
+    updateUI();
+  }
+  function finish(win) {
+    if (ended) return;
+    ended=true; active=false; paused=false;
+    if (win) { rate+=25; wins++; streak++; bestStreak=Math.max(bestStreak,streak); }
+    else { rate=Math.max(0,rate-15); losses++; streak=0; }
+    // 1試合終了するたびに、次の試合の難易度を1段階上げる
+    difficultyLevel++;
+    saveStats(); updateUI();
+    $("overlay").innerHTML = `
+      <div style="font-size:52px">${win?"🏆":"🥄"}</div>
+      <h2>${win?"MATCH WIN!":"MATCH LOSE"}</h2>
+      <p>${win?"勝利！レート＋25！":"敗北…レート－15"}<br>今回のスコア：${score}<br>今回の難易度：Lv.${currentMatchLevel}<br><strong>次の難易度：Lv.${difficultyLevel}<br>現在レート：${rate}　${rankName()}</strong></p>
+      <button class="primary" id="again">次のマッチへ</button>`;
+    $("overlay").style.display="flex";
+    $("again").addEventListener("click",startMatch);
+    $("message").textContent=win?"勝利！レートアップ！":"惜しい！次のマッチに挑戦しよう。";
+  }
+  function fire() {
+    if (!active || paused || cooldown>0) return;
+    shots.push({x:player.x,y:player.y,vx:facing.x*8,vy:facing.y*8,r:9});
+    cooldown=13;
+  }
+  function circle(x,y,r,color) {
+    ctx.fillStyle=color; ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
+  }
+  function draw() {
+    ctx.clearRect(0,0,W,H);
+    ctx.fillStyle="#e3f0d9"; ctx.fillRect(0,0,W,H);
+    ctx.strokeStyle="#c5ddba"; ctx.lineWidth=1;
+    for(let x=0;x<W;x+=40) for(let y=0;y<H;y+=40) ctx.strokeRect(x,y,40,40);
+    ctx.fillStyle="#678b5a"; ctx.font="bold 18px system-ui";
+    ctx.fillText("🍽️ 給食バトルアリーナ",16,29);
+    ctx.fillStyle="#f3d99e"; ctx.fillRect(W/2-90,55,180,38);
+    ctx.fillStyle="#624a2d"; ctx.font="bold 18px system-ui";
+    ctx.fillText(`ランクマッチ　Lv.${active ? currentMatchLevel : difficultyLevel}`,W/2-105,81);
+
+    for(const s of shots) {
+      circle(s.x,s.y,s.r,"#ffdf68"); circle(s.x-2,s.y-2,3,"#fff7d4");
+    }
+    for(const e of enemies) {
+      circle(e.x,e.y,e.r,"#9956c3");
+      circle(e.x,e.y-3,13,"#bd83d8");
+      circle(e.x-6,e.y-4,3,"#fff"); circle(e.x+6,e.y-4,3,"#fff");
+      circle(e.x-6,e.y-4,1.5,"#29202e"); circle(e.x+6,e.y-4,1.5,"#29202e");
+      ctx.strokeStyle="#382047"; ctx.lineWidth=2;
+      ctx.beginPath(); ctx.arc(e.x,e.y+5,5,0,Math.PI); ctx.stroke();
+      ctx.fillStyle="#333"; ctx.fillRect(e.x-17,e.y-29,34,5);
+      ctx.fillStyle="#73ce5b"; ctx.fillRect(e.x-17,e.y-29,34*(e.hp/e.maxHp),5);
+    }
+    if(player) {
+      if(invincible<=0 || Math.floor(invincible/5)%2===0) {
+        circle(player.x,player.y,21,"#efa944");
+        circle(player.x,player.y-3,13,"#ffe0a5");
+        circle(player.x-6,player.y-4,2.5,"#222"); circle(player.x+6,player.y-4,2.5,"#222");
+        ctx.font="23px system-ui"; ctx.fillText("🍴",player.x+13,player.y-13);
+      }
+    }
+    if(paused) {
+      ctx.fillStyle="#18251dcc"; ctx.fillRect(0,0,W,H);
+      ctx.fillStyle="white"; ctx.font="bold 36px system-ui"; ctx.textAlign="center";
+      ctx.fillText("一時停止中",W/2,H/2); ctx.textAlign="left";
+    }
+  }
+  function update(dt) {
+    if(!active || paused) return;
+    let dx=(keys.right?1:0)-(keys.left?1:0);
+    let dy=(keys.down?1:0)-(keys.up?1:0);
+    const len=Math.hypot(dx,dy)||1;
+    if(dx||dy) facing={x:dx/len,y:dy/len};
+    player.x=Math.max(24,Math.min(W-24,player.x+dx/len*4.2*dt));
+    player.y=Math.max(45,Math.min(H-24,player.y+dy/len*4.2*dt));
+    if(cooldown>0) cooldown-=dt;
+    if(invincible>0) invincible-=dt;
+    if(keys.attack) fire();
+
+    for(let i=shots.length-1;i>=0;i--) {
+      const s=shots[i]; s.x+=s.vx*dt; s.y+=s.vy*dt;
+      if(s.x<0||s.x>W||s.y<0||s.y>H) { shots.splice(i,1); continue; }
+      for(let j=enemies.length-1;j>=0;j--) {
+        const e=enemies[j];
+        if(Math.hypot(s.x-e.x,s.y-e.y)<s.r+e.r) {
+          e.hp--; shots.splice(i,1);
+          if(e.hp<=0) { enemies.splice(j,1); score+=100; }
+          break;
+        }
+      }
+    }
+    for(const e of enemies) {
+      const vx=player.x-e.x, vy=player.y-e.y, d=Math.hypot(vx,vy)||1;
+      e.x+=vx/d*e.speed*dt; e.y+=vy/d*e.speed*dt;
+      if(d<e.r+21 && invincible<=0) {
+        hp--; invincible=85;
+        if(hp<=0) { updateUI(); finish(false); return; }
+      }
+    }
+    updateUI();
+    if(enemies.length===0) finish(true);
+  }
+  function loop(time) {
+    const dt=Math.min(2.5,(time-lastTime)/16.667||1); lastTime=time;
+    update(dt); draw(); requestAnimationFrame(loop);
+  }
+
+  const keyMap = {
+    ArrowUp:"up",w:"up",W:"up", ArrowDown:"down",s:"down",S:"down",
+    ArrowLeft:"left",a:"left",A:"left", ArrowRight:"right",d:"right",D:"right",
+    " ":"attack"
+  };
+  // Chromeやキーボード環境によるSpaceキー表記の違いにも対応
+  function getGameKey(e) {
+    if (e.code === "Space" || e.key === " " || e.key === "Spacebar" || e.key === "Space") return "attack";
+    return keyMap[e.key] || null;
+  }
+  window.addEventListener("keydown",e=>{
+    const k=getGameKey(e);
+    if(k) { keys[k]=true; e.preventDefault(); }
+  }, {capture:true});
+  window.addEventListener("keyup",e=>{
+    const k=getGameKey(e);
+    if(k) { keys[k]=false; e.preventDefault(); }
+  }, {capture:true});
+  window.addEventListener("blur",()=>{ keys=Object.create(null); });
+  $("start").addEventListener("click",startMatch);
+  $("next").addEventListener("click",startMatch);
+  $("pause").addEventListener("click",()=>{
+    if(!active) return;
+    paused=!paused;
+    $("pause").textContent=paused?"▶ 再開":"Ⅱ 一時停止";
+    $("message").textContent=paused?"一時停止中":"バトル再開！";
+  });
+  $("reset").addEventListener("click",()=>{
+    if(!confirm("レート・戦績・難易度を初期化しますか？")) return;
+    rate=1000; wins=0; losses=0; streak=0; bestStreak=0; difficultyLevel=1; currentMatchLevel=1;
+    saveStats(); hp=5; score=0; enemies=[]; shots=[]; player=null;
+    active=false; paused=false; ended=true;
+    $("overlay").innerHTML='<div style="font-size:52px">🍛⚔️</div><h2>給食バトル</h2><p>レート・戦績・難易度を初期化したよ！<br>難易度 Lv.1 から再スタート</p><button class="primary" id="start">マッチ開始！</button>';
+    $("overlay").style.display="flex";
+    $("start").addEventListener("click",startMatch);
+    $("message").textContent="レートと難易度を初期化しました。";
+    updateUI(); draw();
+  });
+  updateUI(); draw(); requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
